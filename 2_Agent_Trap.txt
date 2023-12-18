@@ -1,0 +1,315 @@
+/*******************************************************************************************************************************************************
+ * Copyright ?? 2016 <WIZnet Co.,Ltd.> 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the ??Software??), 
+ * to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, 
+ * and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+ * THE SOFTWARE IS PROVIDED ??AS IS??, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. 
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, 
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*********************************************************************************************************************************************************/
+/**
+  ******************************************************************************
+  * @file    WZTOE/Loopback/main.c 
+  * @author  IOP Team
+  * @version V1.0.0
+  * @date    25-AUG-2015
+  * @brief   Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * THE PRESENT FIRMWARE WHICH IS FOR GUIDANCE ONLY AIMS AT PROVIDING CUSTOMERS
+  * WITH CODING INFORMATION REGARDING THEIR PRODUCTS IN ORDER FOR THEM TO SAVE
+  * TIME. AS A RESULT, WIZnet SHALL NOT BE HELD LIABLE FOR ANY
+  * DIRECT, INDIRECT OR CONSEQUENTIAL DAMAGES WITH RESPECT TO ANY CLAIMS ARISING
+  * FROM THE CONTENT OF SUCH FIRMWARE AND/OR THE USE MADE BY CUSTOMERS OF THE
+  * CODING INFORMATION CONTAINED HEREIN IN CONNECTION WITH THEIR PRODUCTS.
+  *
+  * <h2><center>&copy; COPYRIGHT 2015 WIZnet Co.,Ltd.</center></h2>
+  ******************************************************************************
+  */ 
+/* Includes ------------------------------------------------------------------*/
+#include <stdio.h>
+#include "W7500x_crg.h"
+#include "W7500x_gpio.h"
+#include "W7500x_uart.h"
+#include "W7500x_wztoe.h"
+#include "loopback.h"
+#include "W7500x_miim.h"
+#include "W7500x_exti.h"
+#include <stdbool.h>
+
+#include "socket.h"
+#include <string.h>
+#include "W7500x_board.h"
+#include "W7500x_wztoe.h"
+#include "snmp.h"
+#include "ConfigData.h"
+#include "snmp_custom.h"
+/* Private typedef -----------------------------------------------------------*/
+UART_InitTypeDef UART_InitStructure;
+
+/* Private define ------------------------------------------------------------*/
+#define __DEF_USED_MDIO__ 
+#define __W7500P__ // for W7500P
+
+#ifndef __W7500P__ // for W7500
+	#define __DEF_USED_IC101AG__ //for W7500 Test main Board V001
+#endif
+//////////////////////////////////////////////////
+// Socket & Port number definition for Examples //
+//////////////////////////////////////////////////
+#define SOCK_TCPS       0
+#define SOCK_UDPS       1
+#define PORT_TCPS		   5000
+#define PORT_UDPS      3000
+
+#define SOCK_SNMP_AGENT	2
+#define SOCK_SNMP_TRAP	3
+
+#define SEVERPORT 162
+
+
+/* Private function prototypes -----------------------------------------------*/
+void delay(__IO uint32_t milliseconds); //Notice: used ioLibray
+void TimingDelay_Decrement(void);
+
+/* Private variables ---------------------------------------------------------*/
+static __IO uint32_t TimingDelay;
+volatile int externalInterruptFlag = 0;
+static bool alreadyPrinted = false;
+uint8_t test_buf[2048];
+
+/**
+  * @brief   Main program
+  * @param  None
+  * @retval None
+  */
+
+
+static void W7500x_WZTOE_Init(void)
+{
+    ////////////////////////////////////////////////////
+    // W7500x WZTOE (Hardwired TCP/IP core) Initialize
+    ////////////////////////////////////////////////////
+    
+    /* Set Network Configuration: HW Socket Tx/Rx buffer size */
+    uint8_t tx_size[8] = { 4, 2, 2, 2, 2, 2, 2, 0 }; // default: { 2, 2, 2, 2, 2, 2, 2, 2 }
+    uint8_t rx_size[8] = { 4, 2, 2, 2, 2, 2, 2, 0 }; // default: { 2, 2, 2, 2, 2, 2, 2, 2 }
+    
+#ifdef _MAIN_DEBUG_
+    uint8_t i;
+#endif
+    
+    /* Software reset the WZTOE(Hardwired TCP/IP core) */
+    wizchip_sw_reset();
+    
+    /* Set WZ_100US Register */
+    setTIC100US((GetSystemClock()/10000));
+#ifdef _MAIN_DEBUG_
+    printf("\r\n >> WZTOE Settings ==========================\r\n");
+    printf(" - getTIC100US: %X, (%X) \r\n", getTIC100US(), *(uint32_t *)WZTOE_TIC100US); // for debugging
+#endif
+    
+    /* Set Network Configuration */
+    wizchip_init(tx_size, rx_size);
+		
+
+		
+#ifdef _MAIN_DEBUG_
+    printf(" - WZTOE H/W Socket Buffer Settings (kB)\r\n");
+    printf("   [Tx] ");
+    for(i = 0; i < _WIZCHIP_SOCK_NUM_; i++) printf("%d ", getSn_TXBUF_SIZE(i));
+    printf("\r\n");
+    printf("   [Rx] ");
+    for(i = 0; i < _WIZCHIP_SOCK_NUM_; i++) printf("%d ", getSn_RXBUF_SIZE(i));
+    printf("\r\n");
+#endif
+}	
+void GPIO_Setting(){
+	
+	GPIO_InitTypeDef GPIO_InitDef;
+	EXTI_InitTypeDef EXTI_InitDef;
+	
+		    /* Set to GPIO_Pin_0 to Input Port */
+    GPIO_InitDef.GPIO_Pin = GPIO_Pin_1; // Set for Connecting EXTI
+    GPIO_InitDef.GPIO_Mode = GPIO_Mode_IN; // Set to GPIO Mode to Input port
+    GPIO_Init(GPIOA, &GPIO_InitDef); // Set to GPIOA
+	
+	  EXTI_InitDef.EXTI_Line = GPIO_Pin_1; // Connecting GPIO_Pin_0(EXTI Input)
+    EXTI_InitDef.EXTI_Trigger = EXTI_Trigger_Rising; // Set to Trigger to Rising
+    EXTI_Init(PAD_PA, &EXTI_InitDef); // Set to PAD_PA
+    EXTI_Polarity_Set(PAD_PA,GPIO_Pin_1,EXTI_Trigger_Rising); // Set to Polarity
+	
+	
+	
+}
+
+
+	
+int main()
+{
+
+	DevConfig *dev_config = get_DevConfig_pointer();
+    //uint8_t tx_size[8] = { 2, 2, 2, 2, 2, 2, 2, 2 };
+    //uint8_t rx_size[8] = { 2, 2, 2, 2, 2, 2, 2, 2 };
+	  //uint8_t dns_server[4] = {8, 8, 8, 8};           // for Example domain name server
+    uint8_t mac_addr[6] = {0x00, 0x08, 0xDC, 0x01, 0x02, 0x03}; 
+    uint8_t src_addr[4] = {192, 168,  1, 21};
+    uint8_t gw_addr[4]  = {192, 168,  1,  1};
+    uint8_t sub_addr[4] = {255, 255, 255,  0};		
+
+    uint8_t tmp[8];
+		uint8_t i= 1 ;
+		uint8_t managerIP[] = {192, 168, 1,3};  // Replace with your SNMP manager's IP
+    uint8_t agentIP[] = {192, 168, 1, 21};      // Replace with your SNMP agent's IP
+
+   // Replace with your SNMP agent's IP
+
+    /* External Clock */
+    CRG_PLL_InputFrequencySelect(CRG_OCLK);
+
+    /* Set Systme init */
+    SystemInit();
+ 
+		
+    /* Configure UART2 */
+	  S_UART_Init(115200);
+    printf("run \r\n");  
+    /* SysTick_Config */
+    SysTick_Config((GetSystemClock()/1000));
+
+    /* Set WZ_100US Register */
+    setTIC100US((GetSystemClock()/10000));
+    //getTIC100US();	
+    //printf(" GetSystemClock: %X, getTIC100US: %X, (%X) \r\n", 
+    // GetSystemClock, getTIC100US(), *(uint32_t *)TIC100US);        
+    
+		//Snmp Intialize
+
+		
+    W7500x_WZTOE_Init();
+
+		
+		W7500x_Board_Init();
+		
+		
+
+#ifdef __DEF_USED_MDIO__ 
+    /* PHY Initialization */
+  //  PHY_Init();
+    
+    /* PHY Link Check via gpio mdio */
+    while( link() == 0x0)
+    {
+        printf(".");  
+        delay(500);
+    }
+    printf("PHY is linked. \r\n");  
+#else
+    delay(1000);
+    delay(1000);
+#endif
+
+
+    /* Network Configuration */
+    setSHAR(mac_addr);
+    setSIPR(src_addr);
+    setGAR(gw_addr);
+    setSUBR(sub_addr);
+
+		//dev_config->network_info[0].remote_ip[4];
+		
+		snmpd_init(managerIP,agentIP,SOCK_SNMP_AGENT,SOCK_SNMP_TRAP); // SNMP Intialize
+				
+				//GPIO_Setting();
+	//	NVIC_Configuration();
+		
+    getSHAR(tmp);
+  //  printf("MAC ADDRESS : %.2X:%.2X:%.2X:%.2X:%.2X:%.2X\r\n",tmp[0],tmp[1],tmp[2],tmp[3],tmp[4],tmp[5]); 
+    getSIPR(tmp);
+  //  printf("IP ADDRESS : %.3d.%.3d.%.3d.%.3d\r\n",tmp[0],tmp[1],tmp[2],tmp[3]); 
+    getGAR(tmp);
+   // printf("GW ADDRESS : %.3d.%.3d.%.3d.%.3d\r\n",tmp[0],tmp[1],tmp[2],tmp[3]); 
+    getSUBR(tmp);
+  //  printf("SN MASK: %.3d.%.3d.%.3d.%.3d\r\n",tmp[0],tmp[1],tmp[2],tmp[3]); 
+
+	//	GPIO_SetBits(GPIOA,GPIO_Pin_1);
+    
+    /* Set Network Configuration */
+    //wizchip_init(tx_size, rx_size);
+		
+			  GPIO_Setting();
+		
+			
+				
+
+		
+//	while(1) {
+//  externalInterruptFlag = GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_1);
+//  if (externalInterruptFlag == 1) {
+//    if (!alreadyPrinted) {
+//      NVIC_DisableIRQ(GPIO_Pin_1);
+//      initial_Trap(managerIP, agentIP);
+//      alreadyPrinted = true;
+//      NVIC_ClearPendingIRQ(GPIO_Pin_1);
+//      NVIC_EnableIRQ(GPIO_Pin_1);
+//    }
+//  } else {
+//    alreadyPrinted = false;
+//  }
+//}
+
+    printf("TEST- START \r\n");  
+		
+
+		 while(1<=i){
+						
+						if(i==10)
+						{
+							
+							 initial_Trap(managerIP, agentIP);
+							//Initialize_Trap();
+						}
+						i++;
+				}
+		
+    while(1)
+    {
+							
+			loopback_udps(2, test_buf,SEVERPORT); // UDP protocol
+			
+			 snmpd_run(); // SNMP RUN
+			      
+    }
+		
+}
+
+/**
+  * @brief  Inserts a delay time.
+  * @param  nTime: specifies the delay time length, in milliseconds.
+  * @retval None
+  */
+void delay(__IO uint32_t milliseconds)
+{
+  TimingDelay = milliseconds;
+
+  while(TimingDelay != 0);
+}
+
+/**
+  * @brief  Decrements the TimingDelay variable.
+  * @param  None
+  * @retval None
+  */
+void TimingDelay_Decrement(void)
+{
+  if (TimingDelay != 0x00)
+  { 
+    TimingDelay--;
+  }
+}
+
